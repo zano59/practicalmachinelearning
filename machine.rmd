@@ -1,0 +1,120 @@
+---
+title: "Practical Machine Learning"
+author: "Franco Zanini"
+date: "4 June 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+Using devices such as _Jawbone Up_, _Nike FuelBand_, and _Fitbit_ it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how _much_ of a particular activity they do, but they rarely quantify _how well they do it_. Goal of this project will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. 
+
+## Preliminary data preparation
+
+### Download libraries and files
+
+```{r download}
+library(caret)
+library(randomForest)
+library(e1071)
+if(!file.exists("pml-training.csv")){download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile = "pml-training.csv")}
+if(!file.exists("pml-testing.csv")){download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile = "pml-testing.csv")}
+```
+
+### Read and clean 
+
+```{r readclean}
+
+#Read the data, remove columns with missing values and preprocess the data
+trainingSet<- read.csv("pml-training.csv", sep=",", header=TRUE, na.strings = c("NA","",'#DIV/0!'))
+testingSet<- read.csv("pml-testing.csv", sep=",", header=TRUE, na.strings = c("NA","",'#DIV/0!'))
+
+trainingSet <- trainingSet[,(colSums(is.na(trainingSet)) == 0)]
+testingSet <- testingSet[,(colSums(is.na(testingSet)) == 0)]
+
+numIdx <- which(lapply(trainingSet, class) %in% "numeric")
+
+preprocessModel <-preProcess(trainingSet[,numIdx],method=c('knnImpute', 'center', 'scale'))
+pre_trainingSet <- predict(preprocessModel, trainingSet[,numIdx])
+pre_trainingSet$classe <- trainingSet$classe
+
+pre_testingSet <-predict(preprocessModel,testingSet[,numIdx])
+
+
+dim(pre_trainingSet)
+dim(pre_testingSet)
+```
+Cleaning columns with missing data reduces our data from 160 to 60 variables.
+
+We will now remove near zero value predictors
+```{r moreclean}
+# remove variables with nearly zero value
+nzv <- nearZeroVar(pre_trainingSet,saveMetrics=TRUE)
+pre_trainingSet <- pre_trainingSet[,nzv$nzv==FALSE]
+nzv <- nearZeroVar(pre_testingSet,saveMetrics=TRUE)
+pre_testingSet <- pre_testingSet[,nzv$nzv==FALSE]
+```
+
+### Prepare a validation set
+
+The project requires to evaluate the out-of-sample error, so we split the training set into a main training set (_training_) and a validation set (_validate_)
+
+```{r split}
+set.seed(123)
+# creation of a training and validation set with a 2 to 1 ratio
+inTrain <- createDataPartition(y=pre_trainingSet$classe, p=2/3, list=FALSE)
+training <- pre_trainingSet[inTrain, ]
+validate <- pre_trainingSet[-inTrain, ]
+dim(training)
+dim(validate)
+```
+
+## Random Forests
+
+_Random Forests_ is a substantial modification of _bagging_ that that builds a large collection of de-correlated trees, and then averages them. On many problems the performance of random forests is very similar to boosting, and they are simpler to train and tune. As a consequence, random forests are popular, and are implemented in a variety of packages.
+
+On the other hand, random forests can be difficult to interpret, even if very accurate, and care should be taken to avoid overfitting.
+
+### Model building
+
+Ww build a random forest model and set a 5-fold cross-validation to avoid overfitting.
+
+```{r RF}
+modbuildrf <- train(classe ~., method="rf", data=training, trControl=trainControl(method='cv'), number=5, allowParallel=TRUE, importance=TRUE )
+modbuildrf
+```
+
+### Out of sample error estimate
+
+Now we apply the random forest model to the testing data we selected and evaluate accuracy and out of sample error.
+
+```{r confusion}
+# creation and check of the confusion matrix
+predValidrf <- predict(modbuildrf, validate)
+confusion <- confusionMatrix(validate$classe, predValidrf)
+confusion$table
+```
+```{r oos}
+# calculation of accuracy and out of sample error
+
+accur <- postResample(validate$classe, predValidrf)
+modAccuracy <- accur[[1]]
+modAccuracy
+out_of_sample_error <- 1 - modAccuracy
+out_of_sample_error
+```
+We see that the off-diagonal values are low, which is a good sign. The model accuracy, moreover, is more than 99%, with an out of sample error of 0.8%.
+
+### Application of the prediction model
+
+Now we our your prediction model to predict the 20 different test cases required by the project.
+
+```{r model}
+# prediction model applied to test case
+test_cases <- predict(modbuildrf, pre_testingSet)
+test_cases
+```
